@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { toMarkdown, toCsv, toTsv, formatOutput } from '../../src/formatters/index.js';
 import { renderTingTable, renderSubantaTable } from '../../src/formatters/table.js';
+import { extractLakara } from '../../src/commands/ting.js';
+import { formatSubanta } from '../../src/commands/subanta.js';
 
 describe('Formatters', () => {
   const headers = ['A', 'B', 'C'];
@@ -53,5 +55,36 @@ describe('Formatters', () => {
     expect(out).toContain('Subanta: rAma (m)');
     expect(out).toContain('rAmaH');
     expect(out).toContain('rAmARAm');
+  });
+
+  it('correctly extracts lakara names without mutilating "all" or "ashirling"', () => {
+    expect(extractLakara('all')).toBe('all');
+    expect(extractLakara('lat')).toBe('lat');
+    expect(extractLakara('plat')).toBe('lat');
+    expect(extractLakara('alat')).toBe('lat');
+    expect(extractLakara('ashirling')).toBe('ashirling');
+    expect(extractLakara('pashirling')).toBe('ashirling');
+    expect(extractLakara('aashirling')).toBe('ashirling');
+    expect(extractLakara('pvidhiling')).toBe('vidhiling');
+  });
+
+  it('formats subanta matrix as Markdown table with script parity', () => {
+    const matrix = {
+      praTamA: { eka: ['rAmaH'], dvi: ['rAmO'], bahu: ['rAmAH'] },
+      dvitIyA: { eka: ['rAmam'], dvi: ['rAmO'], bahu: ['rAmAn'] },
+      tFtIyA: { eka: ['rAmeRa'], dvi: ['rAmAByAm'], bahu: ['rAmEH'] },
+      caturTI: { eka: ['rAmAya'], dvi: ['rAmAByAm'], bahu: ['rAmeByaH'] },
+      paYcamI: { eka: ['rAmAt'], dvi: ['rAmAByAm'], bahu: ['rAmeByaH'] },
+      zazWI: { eka: ['rAmasya'], dvi: ['rAmayoH'], bahu: ['rAmARAm'] },
+      saptamI: { eka: ['rAme'], dvi: ['rAmayoH'], bahu: ['rAmezu'] },
+      sambodana: { eka: ['rAma'], dvi: ['rAmO'], bahu: ['rAmAH'] },
+    };
+    const md = formatSubanta(matrix, 'rAma', 'm', 'slp1', 'markdown');
+    expect(md).toContain('| viBaktiH | ekavacanam | dvivacanam | bahuvacanam |');
+    expect(md).toContain('| praTamA | rAmaH | rAmO | rAmAH |');
+
+    const devaMd = formatSubanta(matrix, 'rAma', 'm', 'deva', 'markdown');
+    expect(devaMd).toContain('| विभक्तिः | एकवचनम् | द्विवचनम् | बहुवचनम् |');
+    expect(devaMd).toContain('| प्रथमा | रामः | रामौ | रामाः |');
   });
 });

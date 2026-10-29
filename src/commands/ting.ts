@@ -1,10 +1,33 @@
 import pc from 'picocolors';
 import { DhatuRepository } from '../data/repo.js';
-import { renderTingTable } from '../formatters/table.js';
+import { renderTingTable, PURUSHA_NAMES, VACANA_NAMES } from '../formatters/table.js';
 import { formatOutput } from '../formatters/index.js';
 import { OutputFormat, ScriptType, TingFamily, TingPrayoga } from '../types.js';
 import { transliterate } from '../translit/index.js';
 import { WasmEngine } from '../engine/wasm.js';
+
+const LAKARAS = new Set([
+  'lat',
+  'lit',
+  'lut',
+  'lrut',
+  'lot',
+  'lang',
+  'vidhiling',
+  'ashirling',
+  'lung',
+  'lrung',
+]);
+
+export function extractLakara(k: string): string {
+  const lower = k.toLowerCase().trim();
+  if (lower === 'all' || !lower) return 'all';
+  if (LAKARAS.has(lower)) return lower;
+  if ((lower.startsWith('p') || lower.startsWith('a')) && LAKARAS.has(lower.slice(1))) {
+    return lower.slice(1);
+  }
+  return lower;
+}
 
 export interface TingCommandOptions {
   family?: string;
@@ -21,7 +44,8 @@ export function handleTing(dhatuIdOrName: string, options: TingCommandOptions): 
   const script: ScriptType = options.script || 'slp1';
   const family: TingFamily = (options.family?.toLowerCase() as TingFamily) || 'shuddha';
   const prayoga: TingPrayoga = (options.prayoga?.toLowerCase() as TingPrayoga) || 'kartari';
-  const filterLakara = options.lakara ? options.lakara.toLowerCase().replace(/^[pa]/, '') : null;
+  const rawLakara = options.lakara ? extractLakara(options.lakara) : 'all';
+  const filterLakara = rawLakara === 'all' ? null : rawLakara;
   const prefix = options.prefix ? options.prefix.trim() : null;
 
   const entry = DhatuRepository.getDhatu(dhatuIdOrName);
@@ -73,8 +97,8 @@ export function handleTing(dhatuIdOrName: string, options: TingCommandOptions): 
   }
 
   const lakaraKeys = Object.keys(lakaraMap).filter(k => {
-    if (!filterLakara || filterLakara === 'all') return true;
-    const plain = k.replace(/^[pa]/, '');
+    if (!filterLakara) return true;
+    const plain = extractLakara(k);
     return plain === filterLakara;
   });
 
@@ -100,17 +124,23 @@ export function handleTing(dhatuIdOrName: string, options: TingCommandOptions): 
 
   // Render text / markdown / table
   const outSections: string[] = [];
+  const isDeva = script === 'deva';
+  const pHeader = isDeva ? 'पुरुषः' : 'puruzaH';
+  const col1 = isDeva ? VACANA_NAMES[0].deva : VACANA_NAMES[0].slp1;
+  const col2 = isDeva ? VACANA_NAMES[1].deva : VACANA_NAMES[1].slp1;
+  const col3 = isDeva ? VACANA_NAMES[2].deva : VACANA_NAMES[2].slp1;
+  const headers = [pHeader, col1, col2, col3];
+
   for (const lakaraKey of lakaraKeys) {
     const slots = lakaraMap[lakaraKey];
     if (format === 'table') {
       outSections.push(renderTingTable(slots, lakaraKey, script));
     } else {
       // markdown / csv / tsv
-      const headers = ['Puruṣa', 'Ekavacanam', 'Dvivacanam', 'Bahuvacanam'];
       const rows = [
-        ['prathama', transliterate(slots[0], script), transliterate(slots[1], script), transliterate(slots[2], script)],
-        ['madhyama', transliterate(slots[3], script), transliterate(slots[4], script), transliterate(slots[5], script)],
-        ['uttama', transliterate(slots[6], script), transliterate(slots[7], script), transliterate(slots[8], script)],
+        [isDeva ? PURUSHA_NAMES[0].deva : PURUSHA_NAMES[0].slp1, transliterate(slots[0], script), transliterate(slots[1], script), transliterate(slots[2], script)],
+        [isDeva ? PURUSHA_NAMES[1].deva : PURUSHA_NAMES[1].slp1, transliterate(slots[3], script), transliterate(slots[4], script), transliterate(slots[5], script)],
+        [isDeva ? PURUSHA_NAMES[2].deva : PURUSHA_NAMES[2].slp1, transliterate(slots[6], script), transliterate(slots[7], script), transliterate(slots[8], script)],
       ];
       outSections.push(formatOutput({ headers, rows }, format, () => ''));
     }

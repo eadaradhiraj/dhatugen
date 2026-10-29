@@ -17,6 +17,26 @@
 
 ## 1.5 Session Log
 
+### Session — 2026-10-29d: Edge-Case Audit & Fixes (`ting` Default Lakara & `subanta`/`word` Markdown/CSV)
+
+**Trigger**: Deep verification audit across all subcommands and format variants.
+
+1. **`ting` default `--lakara all` & `ashirling` fix**:
+   - `options.lakara.replace(/^[pa]/, '')` naively stripped leading `a` from `'all'`, converting it to `'ll'` and causing `dhatugen ting <dhatu>` without options to report "No lakara tables found for lakara: ll".
+   - It also stripped leading `a` from `ashirling` to `shirling`.
+   - Fixed via `extractLakara` which properly recognizes the 10 Paninian lakāras, strips leading pada prefixes (`plat` -> `lat`, `pashirling`/`aashirling` -> `ashirling`), and preserves `'all'` and bare `ashirling`.
+   - Now `dhatugen ting BU` prints all 10 lakāra 3×3 matrices cleanly by default.
+
+2. **`subanta` & `word` `--format markdown/csv/tsv` support**:
+   - Implemented `formatSubanta` helper with full script parity across Devanagari and SLP1 headers/cells.
+   - Fixed `dhatugen subanta` and `dhatugen word` so `--format markdown`, `--format csv`, and `--format tsv` produce formatted tables instead of falling back to default ANSI box tables.
+
+3. **Test Suite Expansion**:
+   - Added unit tests in `tests/unit/formatters.test.ts` for `extractLakara` and Markdown/Devanagari subanta formatting.
+   - Suite expanded to **60/60 tests passing in 1.38s**.
+
+---
+
 ### Session — 2026-10-29c: Per-Cell Recompute Investigation → Optional Cross-Implementation Sweep Tier
 
 **Trigger**: question whether the exhaustive suites could go from structural
@@ -306,12 +326,12 @@ stale `await` edit in `tests/subanta/full.test.ts`).
 - **`npm test`** (session 2026-10-29b, after shard tiers/idx + labels + wasm tier-up work):
   - `tests/unit/translit.test.ts` (4/4 passed)
   - `tests/unit/wasm.test.ts` (4/4 passed)
-  - `tests/unit/formatters.test.ts` (5/5 passed)
+  - `tests/unit/formatters.test.ts` (7/7 passed — extended: extractLakara & Markdown subanta)
   - `tests/unit/completion.test.ts` (17/17 passed)
   - `tests/unit/search_query.test.ts` (11/11 passed — extended: deva label maps, vacana long variants)
   - `tests/unit/repo.test.ts` (7/7 passed — extended: shabda chunk parity + `@urlid` fallback)
   - `tests/golden/sample.test.ts` (10/10 representative gaṇas passed)
-  - Total: **58 passed in 1.47 seconds**.
+  - Total: **60 passed in 1.38 seconds**.
 - **`npm run test:subanta`**:
   - Subanta sample fixtures against `data/subanta_test/` (2/2 passed in 0.86s).
 - **`npm run test:recompute`** (OPTIONAL, ~40 min — session 2026-10-29c):

@@ -1,10 +1,41 @@
 import pc from 'picocolors';
 import { DhatuRepository } from '../data/repo.js';
-import { renderSubantaTable } from '../formatters/table.js';
+import { renderSubantaTable, VIBHAKTI_NAMES, VACANA_NAMES } from '../formatters/table.js';
 import { formatOutput } from '../formatters/index.js';
 import { OutputFormat, ScriptType } from '../types.js';
 import { transliterate } from '../translit/index.js';
 import { WasmEngine } from '../engine/wasm.js';
+
+export function formatSubanta(
+  matrix: Record<string, { eka: string[]; dvi: string[]; bahu: string[] }>,
+  stem: string,
+  gender: string,
+  script: ScriptType,
+  format: OutputFormat
+): string {
+  if (format === 'table') {
+    return renderSubantaTable(matrix, stem, gender, script);
+  }
+  const isDeva = script === 'deva';
+  const vHeader = isDeva ? 'विभक्तिः' : 'viBaktiH';
+  const col1 = isDeva ? VACANA_NAMES[0].deva : VACANA_NAMES[0].slp1;
+  const col2 = isDeva ? VACANA_NAMES[1].deva : VACANA_NAMES[1].slp1;
+  const col3 = isDeva ? VACANA_NAMES[2].deva : VACANA_NAMES[2].slp1;
+  const headers = [vHeader, col1, col2, col3];
+
+  const rows: string[][] = [];
+  const transCell = (arr?: string[]) => (arr || []).map(f => transliterate(f, script, /[\u0900-\u097F]/.test(f) ? 'deva' : 'slp1')).join(', ') || '—';
+
+  for (const v of VIBHAKTI_NAMES) {
+    const vLabel = isDeva ? v.deva : v.slp1;
+    const rowData = matrix[v.key] || { eka: [], dvi: [], bahu: [] };
+    const eka = transCell(rowData.eka);
+    const dvi = transCell(rowData.dvi);
+    const bahu = transCell(rowData.bahu);
+    rows.push([vLabel, eka, dvi, bahu]);
+  }
+  return formatOutput({ headers, rows }, format, () => '');
+}
 
 export interface SubantaCommandOptions {
   dhatu?: string;
@@ -62,7 +93,7 @@ export function handleSubanta(
         console.log(JSON.stringify(subantaEntry, null, 2));
         return;
       }
-      console.log(renderSubantaTable(subantaEntry.table, subantaEntry.pratipadika, gender, script));
+      console.log(formatSubanta(subantaEntry.table, subantaEntry.pratipadika, gender, script, format));
       return;
     }
 
@@ -128,5 +159,5 @@ export function handleSubanta(
     return;
   }
 
-  console.log(renderSubantaTable(matrix, stem, gender, script));
+  console.log(formatSubanta(matrix, stem, gender, script, format));
 }
