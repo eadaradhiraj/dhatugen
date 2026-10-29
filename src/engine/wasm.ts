@@ -1,5 +1,6 @@
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
+import { setFlagsFromString } from 'v8';
 import path from 'path';
 
 import { transliterate } from '../translit/index.js';
@@ -8,9 +9,27 @@ const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load vendor wasm bundle
+// Path of vendor wasm bundle
 const wasmPath = path.resolve(__dirname, '../../vendor/pkg-node/dhaturupa_wasm.js');
-const rawWasm = require(wasmPath);
+
+/**
+ * V8 dynamic tier-up (Liftoff -> TurboFan background recompile of the 1.2MB
+ * engine) adds ~230ms of trailing background work after the FIRST engine call,
+ * which delays process exit and breaks the <150ms cold CLI budget (measured:
+ * one subantaAnalyze costs 12ms but wall time 248ms; both tier-up flags
+ * together remove the trailer, wall 51ms). Per-call engine costs are tiny
+ * (<=15ms), so the engine runs Liftoff-only. Each flag alone still schedules a
+ * background compile; both are required.
+ */
+let _rawWasm: any = null;
+function rawWasm(): any {
+  if (_rawWasm === null) {
+    setFlagsFromString('--no-wasm-tier-up');
+    setFlagsFromString('--no-wasm-dynamic-tiering');
+    _rawWasm = require(wasmPath);
+  }
+  return _rawWasm;
+}
 
 export interface WasmSubantaCell {
   forms: string[];
@@ -64,14 +83,14 @@ export class WasmEngine {
    */
   static indexShard(form: string, shards: number = 256): { ok: boolean; shard?: number; error?: string } {
     try {
-      const res = rawWasm.index_shard(form, shards);
+      const res = rawWasm().index_shard(form, shards);
       return JSON.parse(res);
     } catch (e: any) {
       return { ok: false, error: e.message };
     }
   }
   static engineStamp(): string {
-    return rawWasm.engine_stamp();
+    return rawWasm().engine_stamp();
   }
 
   /**
@@ -79,13 +98,13 @@ export class WasmEngine {
    */
   static queryCandidates(query: string): WasmCandidatesResponse {
     try {
-      const res = rawWasm.query_candidates(query);
+      const res = rawWasm().query_candidates(query);
       const parsed = JSON.parse(res);
       if (parsed && parsed.ok) return parsed;
 
       // If query was SLP1, convert to Devanagari first
       const deva = transliterate(query, 'deva', 'slp1');
-      const retry = rawWasm.query_candidates(deva);
+      const retry = rawWasm().query_candidates(deva);
       return JSON.parse(retry);
     } catch (e: any) {
       return { ok: false, error: e.message };
@@ -97,7 +116,7 @@ export class WasmEngine {
    */
   static toDevanagari(query: string): { ok: boolean; deva?: string; error?: string } {
     try {
-      const res = rawWasm.to_devanagari(query);
+      const res = rawWasm().to_devanagari(query);
       return JSON.parse(res);
     } catch (e: any) {
       return { ok: false, error: e.message };
@@ -109,7 +128,7 @@ export class WasmEngine {
    */
   static subantaTable(stem: string, linga: string): WasmSubantaResponse {
     try {
-      const res = rawWasm.subanta_table(stem, linga);
+      const res = rawWasm().subanta_table(stem, linga);
       return JSON.parse(res);
     } catch (e: any) {
       return { ok: false, tables: [], error: e.message };
@@ -121,7 +140,7 @@ export class WasmEngine {
    */
   static subantaAnalyze(word: string): WasmSubantaAnalyzeResponse {
     try {
-      const res = rawWasm.subanta_analyze(word);
+      const res = rawWasm().subanta_analyze(word);
       return JSON.parse(res);
     } catch (e: any) {
       return { ok: false, word, analyses: [], tables: [], error: e.message };
@@ -133,7 +152,7 @@ export class WasmEngine {
    */
   static prefixedForms(stack: string, base: string): string[] {
     try {
-      const res = rawWasm.prefixed_forms(stack, base);
+      const res = rawWasm().prefixed_forms(stack, base);
       const parsed = JSON.parse(res);
       if (parsed && Array.isArray(parsed.forms)) {
         return parsed.forms;
@@ -149,7 +168,7 @@ export class WasmEngine {
    */
   static prefixedTable(stack: string, forms: string[]): string[][] {
     try {
-      const res = rawWasm.prefixed_table(stack, JSON.stringify(forms));
+      const res = rawWasm().prefixed_table(stack, JSON.stringify(forms));
       const parsed = JSON.parse(res);
       if (parsed && Array.isArray(parsed.tables)) {
         return parsed.tables;
@@ -171,7 +190,7 @@ export class WasmEngine {
     dhatuNote: string
   ): string[][] {
     try {
-      const res = rawWasm.prefixed_table_ctx(
+      const res = rawWasm().prefixed_table_ctx(
         stack,
         JSON.stringify(forms),
         slp1Dhatu,
@@ -193,7 +212,7 @@ export class WasmEngine {
    */
   static krtSubanta(family: string, krt: string, field: string, value: string, baseindex: string): WasmSubantaResponse {
     try {
-      const res = rawWasm.krt_subanta(family, krt, field, value, baseindex);
+      const res = rawWasm().krt_subanta(family, krt, field, value, baseindex);
       return JSON.parse(res);
     } catch (e: any) {
       return { ok: false, tables: [], error: e.message };

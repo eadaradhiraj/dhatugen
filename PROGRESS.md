@@ -10,16 +10,168 @@
 >   - `data/subanta_test/01/` to `data/subanta_test/10/`: 2,333 individual JSON files with complete 8×3 subanta declension tables for all participles (base and upasarga-prefixed).
 >   - `data/dhatu_data_lite.json`: 409 KB fast index for listing and searching across all 2,259 dhātus.
 >   - `data/shabda2.json`: 6.7 MB dictionary containing 9,007 words with 24 traditional subanta declension cells each (Ashtadhyayi Shabda oracle).
->   - `data/shards/`: 256 hash shards for instant O(1) reverse search across 23 million forms.
+>   - `data/shards/`, `data/shards/sub/`, `data/shards/stack/`: 3 tiers × 256 hash shards for instant O(1) reverse search across ~19.2 million forms (byte-offset `.idx.bin` companions per shard).
 > - **WASM Library**: `vendor/pkg-node/dhaturupa_wasm.js` (+ `.wasm` + `.d.ts`), exporting 43 native morphology functions. Tested and verified working with Node.js v22.
+
+---
+
+## 1.5 Session Log
+
+### Session — 2026-10-29b: Invariant #1 Closure — Search Shards ×3 Tiers, WASM Tier-Up, Deva Labels, Shabda Chunks
+
+**Work executed** (closed at `npm test` **58/58 in 1.47s**; `test:full` 2/2 in 86.12s):
+
+1. **`word` cold start 420ms → 109–146ms (V8 tier-up fix + Shabda chunks)**:
+   - Root cause of the slow tail: not the Shabda oracle init itself, but V8's
+     *dynamic tier-up* — the background Liftoff → TurboFan compile of the
+     1.2MB wasm delayed process exit ~230ms after the first engine call.
+   - Fix in `src/engine/wasm.ts`: inside the lazy `rawWasm()` loader set
+     `v8.setFlagsFromString('--no-wasm-tier-up')` AND
+     `'--no-wasm-dynamic-tiering'`, once. BOTH required (dropping either
+     reintroduces the tail). Engine stays Liftoff-only: per-call ≤15ms — still
+     miles above the 150ms budget.
+   - Shabda oracle chunked offline into `data/shabda/<c0>-<c1>.json` keyed by
+     the first two Devanagari codepoints (693 files + `chunks.json`; generator
+     `scripts/gen-shabda-chunks.mjs`; largest chunk 291KB/332 entries, median
+     ~3KB), so `word` loads one small chunk instead of scanning the 6.7MB
+     oracle.
+   - Miss semantics: a Devanagari chunk miss is authoritative `[]`; only
+     non-Devanagari keys and `@urlid` keys fall back to the full
+     `shabda2.json` (`DhatuRepository.ensureFullShabda`).
+
+2. **Search Details labels (deva mangling fixed; invariant #3 display)**:
+   - New `src/formatters/labels.ts`: `schemeTokenDeva`, `detailsDeva`,
+     `renderDetailsDeva`, `stackDeva`, `vacanaLabelDeva` + `VIBHAKTI_DEVA`/
+     `VACANA_DEVA` (incl. long `ekavacanam`/`dvivacanam`/`bahuvacanam`
+     spellings). Authoritative Devanagari first, transliterated once to the
+     requested script — no more `shuddha → स्हुद्ध` mangling.
+   - Verified in all scripts: deva `शुद्ध · लट् (प)`, slp1 `SudDa · law (pa)`,
+     iast `śuddha · laṭ (pa)`; composite `san_krut` → `सन् + कृत्`; lakāra
+     pada-prefix keys `plat` → `लट् (प)`, `aashirling` → `आशीर्लिङ् (आ)`;
+     stacks `aDi;AN` → `अधि + आङ्`.
+   - Note: this engine's slp1 flavor maps `D → ध` (so शुद्ध is spelled
+     `SudDa`), `S → श`, `N → ङ`.
+
+3. **Three shard tiers (~19.2M forms) and the ~7s deep scan DELETED**:
+   - `base` `data/shards/` — tiṅanta + kṛdanta + prefixed rows:
+     4,636,142 forms / 1076MB.
+   - `sub` `data/shards/sub/` — bare kṛdanta declensions from
+     `data/subanta_test`: 4,135,991 forms / 875MB.
+   - `stack` `data/shards/stack/` — upasarga-prefixed tiṅ + prefixed kṛdanta
+     declensions: 10,392,156 forms / 2345MB.
+   - Tier chain **short-circuits** (first tier with results wins:
+     base→sub→stack) — no cross-tier duplicate rows; the cross-dhatu
+     sequential scan (~7s) was removed entirely from `search`.
+   - Every shard has a companion `shard-XX.idx.bin` ([u32 count][per entry:
+     u16 klen][utf8 key][u32 off][u32 len]); `off` is the absolute utf8 byte
+     offset of the value array `[` in the shard file. Runtime `idxLookup` =
+     linear Buffer.compare scan + `fs.readSync` slice — largest idx (41,080
+     keys, stack/shard-41) scans in 3.1ms, so no binary search was needed.
+   - Canonical shard layout (all tiers):
+     `{"v":1,"tier":"<name>","forms":{<keys utf8-sorted>}}`; canonical writer
+     always emits `<name>.index.json` and removes legacy-named sources.
+
+4. **v1 shard corruption incident (root-caused, repaired, zero data loss)**:
+   - v1 writer bug (1): the base-tier footer emitted `,"v":1}` without the `}`
+     that closes the forms object → all 256 base shards were one brace short
+     (JSON "Expected ',' or '}'" deep mid-file).
+   - v1 writer bug (2): idx formula `off = cursor + klen + 1` forgot the
+     inter-entry comma → every stored idx offset was ≥1 byte too late (slices
+     started on `:`), 18,457/18,458 slices invalid in shard-00.
+   - Bracket-depth and brace-stack probes confirmed content was intact —
+     recovery is purely structural: append the missing `}`, drop the stray
+     scalar `"v"` that v1's broken footer left inside `forms` (visible after
+     repair), canonical rewrite with the comma-aware formula
+     `off = cursor + comma(1 if i>0) + klen + 1`.
+   - The rewritten `scripts/gen-shard-idx.mjs` verifies EVERY idx entry lands
+     exactly on `[`…`]` (catches mid-file drift), JSON.parses first/last
+     slices, and throws on end-of-file offset drift. `sub`/`stack` tiers
+     needed no repair (their generator already closed both braces).
+   - Generator run order for future sessions: `scripts/gen-form-shards.mjs`
+     (full 49.3M-row two-pass generator, ~9.5min — ONLY when row content
+     must change) → `scripts/gen-shard-idx.mjs` (canonical repack/repair/
+     verify, always after any shard change) → optional manifest rewrite.
+   - `data/shards/manifest.json` rewritten as valid JSON (engineStamp,
+     sharding, layout, keyIndex, per-tier forms/MB + provenance, rowTypes,
+     tierOrder, totals: 19,164,289 forms, 4296MB data + 961MB idx ≈ 5.2GB).
+
+5. **Budgets measured (5 runs each, `node dist/cli.js`, cold process)**:
+   - `word`: 109–146ms across all variants (deva input, slp1, `@urlid`).
+   - `search` base hit (Bavati): 129–146ms.
+   - `search` sub hit (भवन्तः): 145–153ms.
+   - `search` stack hit (aDyABavati): 155–158ms typical (one 191ms outlier on
+     FS cold caches — still the right call vs a 7s scan).
+   - `search` miss (geth): 111–134ms.
+   - End-to-end content verified per tier: base `ting` rows, sub
+     `subanta` (`कृत् · शतृ · प्रथमा बहुवचनम्`), stack `prefixed`
+     (`अधि + आङ् · कृत् · स्य-शतृ · सप्तमी एकवचनम्`), `--json` machine-readable
+     with vibhakti/vacana/prefix fields.
+
+**Test delta**: +6 tests (`search_query.test.ts` 6→11: label maps + vacana
+variants; `repo.test.ts` 6→7: shabda chunk parity + `@urlid` fallback).
+`npm test` **58/58 in 1.47s**; `test:subanta` 2/2; `test:audit` 6/6;
+`test:full` 2/2 green — all 2,259 dhātus (4.65s) + all 2,333 subanta
+fixtures (85.7s).
+
+**Deferred**: live shell-completion tests for zsh (not installed on this
+box). The fish script is syntax-verified (`fish -n` on `node dist/cli.js
+completion fish` output — OK).
+
+---
+
+### Session — 2026-10-29 (Session 2): Shell Completion & Reverse-Search Recovery
+
+**Work executed** (baseline verified first: `npm test` 29/29 in 1.53s):
+
+1. **Shell auto-completion (ROADMAP Phase 5 checkbox)**:
+   - New module `src/completion/spec.ts` — completion registry mirroring `cli.ts`
+     exactly (options/shorts/positionals per command) plus static value sets.
+   - New module `src/completion/engine.ts` — pure `computeCompletions(tokens)`.
+   - New module `src/completion/scripts.ts` — bash/zsh/fish generators.
+   - New command `src/commands/complete.ts` — `completion <shell>` (with the
+     full `--format`/`--json` parity) and hidden `__complete`.
+   - `cli.ts` registration + a **pre-commander fast-path intercept** so the
+     engine receives raw argv (commander eats empty fragments and `--`).
+   - Bash script verified live (COMP_WORDS harness); zsh untested on this box
+     (not installed) but schema follows `words[1,n]`/`$word` conventions; fish script follows `commandline -opc/-ct`.
+2. **`translit` parity (invariant #3)**: added `--script`/`--format`/`--json`.
+   Commander default-fill for `--to` made the historic flip-flop dead code and
+   disabled `--script`; precedence is now `--to > --script > slp1` (identical
+   user-visible defaults to the shipped build).
+3. **`search` reverse-lookup recovery (invariant #1)**:
+   - Bug: single autodetected reading (`Bhavati` → slp1-garbage) missed the shard
+     and fell through to a 6.8s full-corpus scan that also found nothing.
+   - Fix: `buildQueryReadings()` generates HK-digraph, SLP1-code,
+     aspirate-collapsed (`Bh->bh`), first-letter-demoted, and literal readings;
+     the shard loop scans every Devanagari reading with a session-scoped raw
+     shard cache; fallback comparisons now use the full slp1/deva reading sets.
+   - Perf: replaced `JSON.parse` of each 4-5MB shard with `extractShardForms`
+     (needle `JSON.stringify(key)+":"` + bracket-balanced slice, ~2ms vs ~95ms).
+   - Result: all hit-form queries ≤ ~270ms (was 6.8s); reversed ordering tested
+     for Bavati/bhavati/भवति/Corayati/corayati/atti/juhoti.
+   - Added `DhatuRepository.liteItems()` for fast completion enumeration.
+4. **Exhaustive test repair (pre-existing bug)**: `tests/subanta/full.test.ts`
+   contained an `await` inside a non-async `it()` callback (left over from a
+   prior heartbeat-yield edit), which broke transpilation — `npm run test:full`
+   failed with "no tests". Made the callback `async`; the full suite now
+   verifies **all 2,333 subanta fixtures + all 2,259 dhatu files (2/2, ~88s)**.
+5. **Docs**: README (completion section + renumbered headings, translit/search
+   notes), ROADMAP (Phase 5 box checked, completion command documented),
+   PROGRESS (this log, budgets, known limitations).
+
+**Test delta**: +23 tests (17 completion spec/engine/scripts, 6 query readings).
+`npm test` = **52/52 in 1.79s**; `test:subanta` 2/2; `test:audit` 6/6;
+`test:full` restored to green (2/2 exhaustive suites; previously failing on a
+stale `await` edit in `tests/subanta/full.test.ts`).
 
 ---
 
 ## 1. Project State & Milestones
 
-- **Current Status**: All Core Phases Implemented & Verified (Phases 0, 1, 2, 3, 4, 5, 6 Complete)
-- **Last Updated**: 2026-10-29
-- **Overall Completion**: 6 / 6 Phases Complete
+
+- **Current Status**: All Core Phases Implemented & Verified (Phases 0, 1, 2, 3, 4, 5, 6 Complete) + Phase 7 (Shell Completion & Reverse-Search Recovery)
+- **Last Updated**: 2026-10-29 (session 2)
+- **Overall Completion**: 7 / 7 Phases Complete
 
 ### User-Locked Design Specifications (Confirmed)
 1. **Default Script**: SLP1 (`Bavati`, `rAma`, etc.), with `--script <deva|iast|hk|slp1>` available on all commands. Input script is auto-detected (Devanagari, HK, SLP1, IAST).
@@ -40,6 +192,7 @@
 | **Phase 4** | Subanta & Word Engine | ✅ Done | Shabda oracle (9,007 words) + Vidyut nominal declension & reverse analysis |
 | **Phase 5** | Exhaustive Test Suites | ✅ Done | Fast unit/golden sample tests (29/29 passing), full golden (2,259 dhatus passing) |
 | **Phase 6** | Packaging & Documentation | ✅ Done | ROADMAP.md, PROGRESS.md, README.md, executable CLI bin link |
+| **Phase 7** | Shell Completion & Search Recovery | ✅ Done | `completion <bash|zsh|fish>` + hidden `__complete` engine (17 new tests); `search` multi-reading normalization + O(1) shard needle extraction (6.8s → ~150-270ms); `translit` `--script`/`--format` parity |
 
 ---
 
@@ -82,37 +235,46 @@
    - `ting.ts`: Verbal conjugations across 10 lakāras, 5 families, 2 voices, and prefix stacks.
    - `krut.ts`: Participles with base, m, f, n columns.
    - `subanta.ts`: Nominal declension for arbitrary stems or via dhātu participle click-through.
-   - `search.ts`: Reverse search with instant O(1) hash sharding (<50ms).
+   - `search.ts`: Reverse search with instant O(1) hash sharding; multi-reading query normalization (`buildQueryReadings`); raw-shard needle extraction (`extractShardForms`).
    - `word.ts`: Morphological reverse analysis + traditional Shabda oracle lookup.
    - `prefix.ts`: Upasarga surface derivation.
-   - `translit.ts`: Transliteration CLI tool.
+   - `translit.ts`: Transliteration CLI tool (`--to`/`--from`/`--script` + `--format`/`--json` parity).
+   - `complete.ts`: `completion <shell>` script generator + hidden `__complete` engine entrypoint.
    - `repl.ts`: Interactive REPL shell.
+
+7. **`src/completion/`**:
+   - `spec.ts`: Completion registry — per-command option/short/positional maps plus static value sets (63 kṛt pratyayas & 23 upasargas extracted once from the corpus).
+   - `engine.ts`: Pure `computeCompletions(tokens)` (leading-empty tolerant; `--opt=value` support; dhatu ids via lite index, literal-prefix, cap 100).
+   - `scripts.ts`: bash / zsh / fish script generators with `DHATUGEN_BIN` override.
 
 ---
 
 ## 4. Test Verification Status
 
-- **`npm test`**:
+- **`npm test`** (session 2026-10-29b, after shard tiers/idx + labels + wasm tier-up work):
   - `tests/unit/translit.test.ts` (4/4 passed)
   - `tests/unit/wasm.test.ts` (4/4 passed)
-  - `tests/unit/repo.test.ts` (6/6 passed)
   - `tests/unit/formatters.test.ts` (5/5 passed)
+  - `tests/unit/completion.test.ts` (17/17 passed)
+  - `tests/unit/search_query.test.ts` (11/11 passed — extended: deva label maps, vacana long variants)
+  - `tests/unit/repo.test.ts` (7/7 passed — extended: shabda chunk parity + `@urlid` fallback)
   - `tests/golden/sample.test.ts` (10/10 representative gaṇas passed)
-  - Total: 29 passed in 1.69 seconds.
+  - Total: **58 passed in 1.47 seconds**.
 - **`npm run test:subanta`**:
   - Subanta sample fixtures against `data/subanta_test/` (2/2 passed in 0.86s).
 - **`npm run test:audit`**:
-  - Reverse lookup audit (6/6 passed in 0.50s).
-- **`npm run test:full`**:
-  - Exhaustive golden test: all 2,259 dhātus in `data/01/` to `data/10/` verified with 0 errors.
-  - Exhaustive subanta test: all 2,333 subanta test files in `data/subanta_test/`.
+  - Reverse lookup audit (6/6 passed in 0.52s).
+- **`npm run test:full`** (session 2026-10-29b — green):
+  - Exhaustive golden test: all 2,259 dhātus in `data/01/` to `data/10/` verified with 0 errors (4.65s).
+  - Exhaustive subanta test: all 2,333 subanta test files in `data/subanta_test/` verified (85.7s).
+  - Total 2/2 in 86.12s.
 
 ---
 
 ## 5. Key Design Decisions & Performance
 
 1. **Wholly Self-Sufficient & Independent Architecture**:
-   - **Zero External Dependencies**: All WASM binaries (`vendor/pkg-node/`), data files (`data/01`..`10`), subanta fixtures (`data/subanta_test/`), Shabda oracle (`data/shabda2.json`), fast lite index (`data/dhatu_data_lite.json`), and 256 hash shards (`data/shards/`) are stored locally inside `dhatugen`.
+   - **Zero External Dependencies**: All WASM binaries (`vendor/pkg-node/`), data files (`data/01`..`10`), subanta fixtures (`data/subanta_test/`), Shabda oracle (`data/shabda2.json`), fast lite index (`data/dhatu_data_lite.json`), Shabda chunks (`data/shabda/`), and 256×3 hash shards (`data/shards/`, `data/shards/sub/`, `data/shards/stack/` — all gitignored, on-disk only) are stored locally inside `dhatugen`.
    - **Zero Network Calls**: Runs 100% offline. No CDNs, no API endpoints, no network overhead.
    - **Relocation Safe**: Zero relative references outside the workspace (`PROJECT_ROOT` resolves internally).
 2. **Ultra-High Speed Optimization**:
@@ -120,17 +282,32 @@
    - **Warm / REPL Execution**:
      - `subanta`: **~10ms**
      - `ting`: **~50ms**
-     - `search`: **~80ms** (instant O(1) hash sharding across 23 million forms).
+     - `search`: **~130-160ms cold** (tier chain over 3 tiers × 256 hash shards, ~19.2M forms — per-form value sliced by byte-offset idx, no JSON.parse of multi-MB shards; upasarga-prefixed/stack tier ~155-190ms).
    - **Fast-Path Normalization**: Bypasses index loading when baseindex is already formatted (`01.0001` or `1.1`), loading only the specific requested dhatu JSON in <5ms.
+   - **Completion Engine Budgets** (measured cold, one-shot process per TAB):
+     - enum/flag completions: **~97ms**
+     - dhatu-id completions (lite index + translit): **~123ms**
+     - script generation (`completion bash`): **~85ms**
+     - `search` shard-hit (deva query): **~149-180ms** (was 6.8s before the shard needle-extraction fix)
 3. **Pluggable Output Formats**:
    - Default: Human-readable terminal matrix (Unicode borders, Devanagari/SLP1 headers).
    - `--json`: Machine-readable JSON output for scripting, pipelines, and tools.
    - `--format markdown`: Clean markdown tables for notes and documentation.
-   - `--script <deva|slp1|hk|iast>`: Universal transliteration flag on all commands.
+   - `--script <deva|slp1|hk|iast>`: Universal transliteration flag on all commands (now honoured by `translit` and `completion` too).
 4. **Multi-tiered Testing**:
    - Quick tests run in < 2 seconds for interactive development (`npm test`).
    - Sample golden tests run across 10 gaṇas.
    - Exhaustive tests run across all 2,259 dhatus and 2,333 subanta files with progress indicators.
+5. **Shell Auto-Completion Architecture**:
+   - Visible `dhatugen completion <bash|zsh|fish>` prints a self-contained script; hidden `dhatugen __complete <words...>` is the live engine (raw argv fast-path intercepts it *before* commander parsing so empty fragments and `--` tokens are preserved).
+   - Suggestions: subcommands -> per-command flags -> `--opt=value` sequences -> enum values (scripts/formats/lakāras/families/pratyayas/upasargas/genders/gaṇas) -> dhātu ids via the lite index (literal-prefix only so the shells' own re-filtering — compgen/compadd — agrees with the engine output; cap 100).
+   - `DHATUGEN_BIN` overrides the binary in scripts for non-linked installs.
+   - Value lists for kṛt pratyayas (63) and upasargas (23) were extracted once from the full `data/01..10` corpus and embedded as constants in `src/completion/spec.ts` so TAB presses never scan the corpus.
+6. **Known Limitation → RESOLVED (2026-10-29b)**: Previously documented limitations are all fixed:
+   - `search` cross-dhatu sequential scan (~7s) **DELETED**; misses now return quickly through the shard tier chain.
+   - Shard coverage extended from plain shuddha tiṅanta to THREE tiers: `base` (tiṅ + kṛdanta + prefixed rows, 4.6M forms), `sub` (bare kṛdanta subanta declensions from `data/subanta_test`, 4.1M forms), `stack` (upasarga-prefixed tiṅ + prefixed kṛdanta declensions, 10.4M forms) — ~19.2M unique forms, FNV-1a sharded ×256.
+   - `word` cold start 420ms → 109–146ms (V8 tier-up flags + Shabda chunk cache + authoritative Devanagari-miss fast path).
+   - `search --script deva` label mangling (`shuddha` → `स्हुद्ध`) fixed via `src/formatters/labels.ts` token maps (`शुद्ध · लट् (प)` style authoritative Devanagari, then transliterated to the requested script once).
 
 ---
 
@@ -140,9 +317,9 @@ When an LLM agent is prompted to resume or extend work in this repository (e.g. 
 
 1. **Orientation**:
    - First read `PROGRESS.md` (this file) and `ROADMAP.md`.
-   - Run `npm test` to verify that the environment and 29 baseline tests are passing.
+   - Run `npm test` to verify that the environment and all baseline tests (now 52) are passing.
 2. **Key Invariants**:
-   - **Keep it fast**: Maintain the cold startup time (<150ms) and warm REPL speed (<50ms). Always use the fast-path baseindex check and shard lookup.
+   - **Keep it fast**: Maintain the cold startup time (<150ms) and warm REPL speed (<50ms). Always use the fast-path baseindex check and shard lookup. `search` shard access reads the raw shard text and extracts only the queried key (`extractShardForms`) — never `JSON.parse` a whole 4-5MB shard.
    - **Self-sufficiency**: Do not introduce remote network dependencies or hardcode paths outside `dhatugen/`. All assets must resolve relative to `PROJECT_ROOT`.
    - **Script Parity**: All new commands/features must support `--script <slp1|deva|hk|iast>` (default `slp1`).
    - **Multi-Format Output**: All new commands should support `--format <table|json|markdown|csv|tsv>` and `--json`.

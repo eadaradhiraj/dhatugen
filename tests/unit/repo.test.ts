@@ -52,4 +52,19 @@ describe('Dhatu Repository', () => {
     expect(entries.length).toBeGreaterThan(0);
     expect(entries[0].cells.length).toBe(24);
   });
+
+  it('shabda chunk lookup matches SLP1 query and urlid fallback', () => {
+    const deva = DhatuRepository.getShabdaEntries('राम');
+    expect(deva.length).toBeGreaterThan(0);
+    expect(deva[0].urlid).toBe('@rAma1');
+    const slp1 = DhatuRepository.getShabdaEntries('rAma');
+    expect(slp1).toEqual(deva);
+    const url = DhatuRepository.getShabdaEntries(deva[0].urlid);
+    expect(url.length).toBeGreaterThan(0);
+    expect(url[0].cells.length).toBe(24);
+    // multi-linga words return every entry
+    expect(DhatuRepository.getShabdaEntries('भवत्').length).toBe(2);
+    // missing words resolve without chunk and stay empty
+    expect(DhatuRepository.getShabdaEntries('xyzqतिxyz')).toEqual([]);
+  });
 });

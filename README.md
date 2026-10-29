@@ -12,7 +12,8 @@
 - **Kṛdanta Participles (`krut`)**: Complete participle tables with `base`, `m`, `f`, `n` forms for ~60+ kṛt pratyayas.
 - **Subanta Declensions (`subanta`)**: Traditional 8×3 nominal declension matrices (prathamā to sambodhana × eka, dvi, bahu) for any stem, or direct kṛdanta click-through.
 - **Word View & Reverse Analysis (`word` / `decline`)**: Analyze any inflected word to its base stem, gender, case, and number, backed by the 9,007-word Ashtadhyayi Shabda oracle (`shabda2.json`).
-- **Lightning-Fast Reverse Search (`search`)**: O(1) hash-sharded reverse search across 2,259 dhātus and 23 million forms in <50ms.
+- **Lightning-Fast Reverse Search (`search`)**: O(1) hash-sharded reverse search across 2,259 dhātus and ~19.2 million forms (three tiers × 256 shards: bare tiṅ/kṛt/prefixed, kṛdanta declensions, upasarga-prefixed forms) at ~130-190ms cold per process, byte-offset shard indexes — no multi-second scans. Multi-reading query normalization resolves the classic latin ambiguity (`Bhavati` vs `Bavati` vs `bhavati`) automatically.
+- **Shell Auto-Completion (`completion`)**: One-command generation of bash, zsh, and fish completion scripts. Suggestions cover subcommands, per-command options, enumerated grammatical values, and dhātu identifiers, driven by the CLI's own live engine.
 - **Dhatu Metadata & Literature (`show`)**: Complete Upadeśa form, gaṇa, pada, seṭ/aniṭ, karmakatva, Upasargārtha Candrikā citations, and classical literature quotations (Rāmāyaṇa, Gītā, Raghuvaṃśa).
 - **Interactive REPL (`repl`)**: Full interactive shell with command history and prompt.
 - **Universal Multi-Script Support**: Seamless conversion between **SLP1** (default), **Devanagari**, **Harvard-Kyoto (HK)**, and **IAST** via `--script <deva|slp1|hk|iast>`.
@@ -51,7 +52,34 @@ dhatugen repl
 dhatugen repl --script deva
 ```
 
-### 2. Listing & Filtering Dhātus (`list`)
+### 2. Shell Auto-Completion (`completion`)
+Generate tab-completion scripts for your shell. Suggestions are produced live by
+the CLI itself (`dhatugen __complete`), so they always cover the full command
+registry, every option, enumerated values (`--script`, `--format`, `--lakara`,
+`--family`, `--pratyaya`, `--gender`, ...) and dhātu identifiers.
+
+```bash
+# bash (requires bash >= 4):
+dhatugen completion bash >> ~/.bashrc
+
+# zsh: place in a $fpath directory (as "_dhatugen"):
+mkdir -p ~/.zfunc && dhatugen completion zsh > ~/.zfunc/_dhatugen
+#  and in ~/.zshrc, before compinit:  fpath=(~/.zfunc $fpath)
+
+# fish:
+dhatugen completion fish > ~/.config/fish/completions/dhatugen.fish
+```
+
+Notes:
+- When the package is not globally linked, set `DHATUGEN_BIN` to the entrypoint
+  used by the completion scripts, e.g.
+  `export DHATUGEN_BIN="node /path/to/dhatugen/dist/cli.js"`.
+- Dhātu identifier completion requires a prefix (e.g. `01.`, `bh`, `भ`) to avoid
+  flooding the terminal with all 2,259 ids.
+- All completion scripts support `--format json|markdown|csv|tsv` for
+  programmatic generation.
+
+### 3. Listing & Filtering Dhātus (`list`)
 Filter by gaṇa, pada, iḍāgama, karmakatva, or search term:
 ```bash
 # List first 10 dhatus in Gana 1 (Bvadi)
@@ -70,7 +98,7 @@ dhatugen list --limit 5 --format markdown
 dhatugen list --limit 3 --json
 ```
 
-### 3. Detailed Dhātu Card (`show`)
+### 4. Detailed Dhātu Card (`show`)
 ```bash
 # Basic metadata card
 dhatugen show 01.0001
@@ -83,7 +111,7 @@ dhatugen show 01.0001 --chandrika
 dhatugen show 01.0001 --prayoga
 ```
 
-### 4. Tiṅanta Verbal Conjugations (`ting`)
+### 5. Tiṅanta Verbal Conjugations (`ting`)
 ```bash
 # Present tense (lat) for root BU
 dhatugen ting 01.0001 --lakara lat
@@ -99,7 +127,7 @@ dhatugen ting 01.0001 --lakara lat --prefix pra
 dhatugen ting 01.0001 --lakara lat --prefix 'vi + ati'
 ```
 
-### 5. Kṛdanta Participles (`krut`)
+### 6. Kṛdanta Participles (`krut`)
 ```bash
 # All participles for root BU
 dhatugen krut 01.0001
@@ -111,7 +139,7 @@ dhatugen krut 01.0001 --pratyaya ktavatu
 dhatugen krut 01.0001 --family san
 ```
 
-### 6. Subanta Nominal Declensions (`subanta`)
+### 7. Subanta Nominal Declensions (`subanta`)
 ```bash
 # Decline stem in masculine (m)
 dhatugen subanta rAma m
@@ -123,7 +151,7 @@ dhatugen subanta BavantI f
 dhatugen subanta --dhatu 01.0001 --krt Satf --gender f
 ```
 
-### 7. Word View & Reverse Analysis (`word` / `decline`)
+### 8. Word View & Reverse Analysis (`word` / `decline`)
 ```bash
 # Reverse-analyze inflected noun to find base stem and case
 dhatugen word rAmeRa
@@ -133,7 +161,7 @@ dhatugen word सरिद्भ्याम्
 dhatugen decline sarit f
 ```
 
-### 8. Reverse Search (`search`)
+### 9. Reverse Search (`search`)
 ```bash
 # Cross-dhatu search across all 2,259 roots (works in HK, SLP1, or Devanagari)
 dhatugen search Bavati
@@ -144,18 +172,24 @@ dhatugen search भवति
 dhatugen search Bavati --dhatu 01.0001
 ```
 
-### 9. Upasarga Prefix Derivation (`prefix`)
+### 10. Upasarga Prefix Derivation (`prefix`)
 ```bash
 dhatugen prefix pra Bavati
 dhatugen prefix 'vi + ati' Bavati
 dhatugen prefix 'वि + अति' भवति --script deva
 ```
 
-### 10. Script Transliteration (`translit`)
+### 11. Script Transliteration (`translit`)
 ```bash
 dhatugen translit भवति               # -> Bavati
 dhatugen translit Bavati --to deva    # -> भवति
 dhatugen translit bhavati --to iast   # -> bhavati
+
+# --script parity with all other commands (acts as the target script):
+dhatugen translit भू --script hk      # -> bhU
+# Machine-readable output:
+dhatugen translit भवति --format json
+dhatugen translit Bavati --format csv
 ```
 
 ---
@@ -190,7 +224,7 @@ dhatugen/
 │   ├── subanta_test/01/ .. 10/ # 2,333 subanta declension test fixtures
 │   ├── dhatu_data_lite.json    # Fast metadata index
 │   ├── shabda2.json            # 9,007-word Shabda oracle
-│   └── shards/                 # 256 hash shards for instant reverse search
+│   └── shards/                 # 3 tiers × 256 hash shards + .idx.bin byte-offset indexes (base: tiṅ/kṛt/prefixed, sub/: kṛdanta declensions, stack/: upasarga-prefixed)
 ├── src/
 │   ├── cli.ts                  # Commander CLI entrypoint
 │   ├── types.ts                # TypeScript interfaces

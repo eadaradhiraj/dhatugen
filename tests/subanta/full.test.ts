@@ -8,7 +8,7 @@ const __dirname = path.dirname(__filename);
 const SUBANTA_DIR = path.resolve(__dirname, '../../data/subanta_test');
 
 describe('Exhaustive Subanta Fixture Verification (All 2,333 Files)', () => {
-  it('validates all subanta test fixtures have valid 8x3 tables', () => {
+  it('validates all subanta test fixtures have valid 8x3 tables', async () => {
     let totalFixtures = 0;
     let totalParticipleTables = 0;
 

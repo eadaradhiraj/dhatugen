@@ -11,6 +11,7 @@ import { handleWord } from './commands/word.js';
 import { handlePrefix } from './commands/prefix.js';
 import { handleTranslit } from './commands/translit.js';
 import { startRepl } from './commands/repl.js';
+import { handleCompletion, handleComplete } from './commands/complete.js';
 
 const program = new Command();
 
@@ -152,14 +153,46 @@ program
     handlePrefix(stack, base, opts);
   });
 
+// COMPLETION command (shell script generator)
+program
+  .command('completion <shell>')
+  .description('Generate shell auto-completion script (bash, zsh, fish)')
+  .option('-f, --format <format>', 'Output format: table (raw script), json, markdown, csv, tsv', 'table')
+  .option('--script <script>', 'Accepted for script parity; completion output is shell code (ignored)', 'slp1')
+  .option('--json', 'Shortcut for --format json')
+  .action((shell, opts) => {
+    handleCompletion(shell, opts);
+  });
+
+// HIDDEN __complete entrypoint (shell completion engine)
+program
+  .command('__complete <words...>', { hidden: true })
+  .description('Internal shell completion engine (not for direct use)')
+  .allowUnknownOption()
+  .action((words, opts) => {
+    handleComplete(words as string[]);
+  });
+
 // TRANSLIT command
 program
   .command('translit <text>')
   .description('Transliterate Sanskrit text between Devanagari, SLP1, Harvard-Kyoto (HK), and IAST')
-  .option('-t, --to <script>', 'Target script: slp1, deva, hk, iast', 'slp1')
+  .option('-t, --to <script>', 'Target script: slp1, deva, hk, iast')
   .option('-f, --from <script>', 'Source script: slp1, deva, hk, iast')
+  .option('-s, --script <script>', 'Target script (equivalent to --to); kept for --script parity across commands')
+  .option('--format <format>', 'Output format: table (raw text), json, markdown, csv, tsv', 'table')
+  .option('--json', 'Shortcut for --format json')
   .action((text, opts) => {
     handleTranslit(text, opts);
   });
 
-program.parse(process.argv);
+// ---------------------------------------------------------------------------
+// Fast path BEFORE commander parsing: the hidden shell-completion engine must
+// receive raw argv intact (empty-string fragments and "--" fragments are
+// semantically meaningful to the engine but are eaten by option parsing).
+// ---------------------------------------------------------------------------
+if (process.argv[2] === '__complete') {
+  handleComplete(process.argv.slice(3));
+} else {
+  program.parse(process.argv);
+}

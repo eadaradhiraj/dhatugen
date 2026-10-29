@@ -11,14 +11,142 @@ import { formatOutput } from '../formatters/index.js';
 import { OutputFormat, ScriptType, SearchResultItem } from '../types.js';
 import { transliterate, detectScript } from '../translit/index.js';
 import { WasmEngine } from '../engine/wasm.js';
+import { detailsDeva, renderDetailsDeva, stackDeva, vacanaLabelDeva } from '../formatters/labels.js';
 
 export interface SearchCommandOptions {
+
   dhatu?: string;
   family?: string;
   limit?: string;
   format?: OutputFormat;
   script?: ScriptType;
   json?: boolean;
+}
+
+/**
+ * Extracts only `forms[key]` from a shard's raw JSON text: a full JSON.parse
+ * of a 4-5MB shard costs ~95ms — a needle scan for the exact key plus a
+ * bracket-balanced slice costs ~2ms, keeping shard lookup truly O(1).
+ */
+/** Cache of loaded per-shard binary key indexes (see scripts/gen-shard-idx.mjs). */
+const idxCache = new Map<string, Buffer>();
+
+/**
+ * O(log-scan) shard value lookup: binary-sorts against the shard's companion
+ * .idx.bin (sorted deva keys + utf8 byte offsets) and reads ONLY the value
+ * slice (~rows bytes) from the shard file instead of parsing the whole
+ * multi-MB shard. Keeps every search inside the <150ms cold budget.
+ */
+function idxLookup(dir: string, shardNum: string, key: string): any[][] {
+  const dataFile = path.join(dir, `shard-${shardNum}.index.json`);
+  const idxPath = dataFile.replace('.index.json', '.idx.bin');
+  let idx = idxCache.get(idxPath);
+  if (idx === undefined) {
+    if (!fs.existsSync(idxPath)) return [];
+    idx = fs.readFileSync(idxPath);
+    idxCache.set(idxPath, idx);
+  }
+  const count = idx.readUInt32LE(0);
+  const keyBuf = Buffer.from(key, 'utf8');
+  let pos = 4;
+  let off = -1;
+  let len = 0;
+  for (let i = 0; i < count; i++) {
+    const klen = idx.readUInt16LE(pos);
+    pos += 2;
+    const cmp = Buffer.compare(idx.subarray(pos, pos + klen), keyBuf);
+    pos += klen;
+    const eOff = idx.readUInt32LE(pos);
+    pos += 4;
+    const eLen = idx.readUInt32LE(pos);
+    pos += 4;
+    if (cmp === 0) { off = eOff; len = eLen; break; }
+  }
+  if (off < 0) return [];
+  const fd = fs.openSync(dataFile, 'r');
+  try {
+    const buf = Buffer.alloc(len);
+    const read = fs.readSync(fd, buf, 0, len, off);
+    return JSON.parse(buf.toString('utf8', 0, read)) as any[][];
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function extractShardForms(raw: string, key: string): any[][] {
+  const needle = JSON.stringify(key) + ':';
+  const at = raw.indexOf(needle);
+  if (at === -1) return [];
+  let i = at + needle.length;
+  while (i < raw.length && raw[i] !== '[') i++;
+  if (raw[i] !== '[') return [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (; i < raw.length; i++) {
+    const c = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === '[') depth++;
+    else if (c === ']') {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(raw.slice(at + needle.length, i + 1)) as any[][];
+        } catch {
+          return [];
+        }
+      }
+    }
+  }
+  return [];
+}
+
+/**
+ * Derives every plausible SLP1/Devanagari reading of a raw query by
+ * attempting HK-digraph, SLP1-code, aspirate-collapsed, and literal
+ * interpretations. Reverse lookup requires exact matches, so every
+ * spelling ambiguity must be tried.
+ */
+export function buildQueryReadings(query: string): { devaReadings: Set<string>; slp1Readings: Set<string> } {
+  const cleanQuery = query.trim();
+  const detected = detectScript(cleanQuery);
+  const devaReadings = new Set<string>();
+  const slp1Readings = new Set<string>();
+  if (detected === 'deva') {
+    devaReadings.add(cleanQuery);
+    slp1Readings.add(transliterate(cleanQuery, 'slp1', 'deva'));
+  } else {
+    // Read the input as HK digraphs, as SLP1 codes, and with SLP1-style
+    // uppercase aspirates collapsed into HK digraphs ("Bhavati" -> "bhavati"),
+    // which is the common human spelling (bhavati with a capital B).
+    const aspirFixed = cleanQuery.replace(/([KGCJWQTDPB])h/g, (m) => m.toLowerCase());
+    for (const src of [cleanQuery, aspirFixed]) {
+      devaReadings.add(transliterate(src, 'deva', 'hk'));
+      devaReadings.add(transliterate(src, 'deva', 'slp1'));
+    }
+    // First-letter demotion resolves "Corayati"-style inputs, where the
+    // capital is a typing habit rather than a semantic aspirate (lowercase
+    // consonant codes are identical in SLP1 and HK, so this is unambiguous).
+    if (/^[A-Z]/.test(cleanQuery)) {
+      const demoted = cleanQuery.charAt(0).toLowerCase() + cleanQuery.slice(1);
+      devaReadings.add(transliterate(demoted, 'deva', 'hk'));
+      devaReadings.add(transliterate(demoted, 'deva', 'slp1'));
+    }
+    // Whatever the autodetector decides (iast, deva, ...).
+    devaReadings.add(transliterate(cleanQuery, 'deva'));
+    devaReadings.add(cleanQuery);
+    for (const d of devaReadings) {
+      if (d) slp1Readings.add(transliterate(d, 'slp1', 'deva'));
+    }
+    slp1Readings.add(cleanQuery);
+  }
+  return { devaReadings, slp1Readings };
 }
 
 export function handleSearch(query: string, options: SearchCommandOptions): void {
@@ -32,76 +160,176 @@ export function handleSearch(query: string, options: SearchCommandOptions): void
   }
 
   const cleanQuery = query.trim();
-  const querySlp1 = transliterate(cleanQuery, 'slp1');
-  const queryDeva = transliterate(cleanQuery, 'deva');
 
-  const results: SearchResultItem[] = [];
+  // Multi-reading normalization: latin input is ambiguous between SLP1
+  // aspirate codes ("Bavati") and HK digraphs ("Bhavati"); autodetection
+  // alone picks one and mangles the other. Generate every plausible
+  // Devanagari/SLP1 reading so reverse lookup always reaches the shards.
+  const { devaReadings, slp1Readings } = buildQueryReadings(cleanQuery);
+  // Shard keys are Devanagari form entries; latin/other readings are only
+  // meaningful after conversion, so filter before touching the shards.
+  const hasDevaChars = (s: string) => /[\u0900-\u097F]/.test(s);
+  const queryDevaList = [...devaReadings].filter((r) => r && hasDevaChars(r));
 
-  // Fast Shard Index Lookup (if available)
-  const shardDir = path.resolve(__dirname, '../../data/shards');
-  if (!options.dhatu && fs.existsSync(shardDir)) {
-    try {
-      const shardRes = WasmEngine.indexShard(queryDeva, 256);
-      if (shardRes.ok && shardRes.shard !== undefined) {
-        const shardNum = String(shardRes.shard).padStart(2, '0');
-        const shardFile = path.join(shardDir, `shard-${shardNum}.index.json`);
-        if (fs.existsSync(shardFile)) {
-          const shardData = JSON.parse(fs.readFileSync(shardFile, 'utf8'));
-          const matches = shardData.forms?.[queryDeva] || [];
+const results: SearchResultItem[] = [];
 
-          for (const m of matches) {
-            const dhatuId = m[0];
-            const typeKey = m[1];
-            const family = m[2];
-            const prayoga = m[3];
-            const lakaraOrPrat = m[4];
-            const slot = m[5];
+const seenShard = new Set<string>();
+const rawShardCache = new Map<string, string>();
 
-            const entry = DhatuRepository.getDhatu(dhatuId);
-            const opadesha = entry?.info.find(i => i.name === 'OpadeSikasvarUpam')?.value || dhatuId;
-            const artha = entry?.info.find(i => i.name === 'arTaH')?.value || '';
-            const gana = entry?.info.find(i => i.name === 'gaRaH')?.value || '';
+/** Maps one shard row to a result item (all tiers). */
+function pushShardRow(m: any[], qDeva: string): void {
+  if (results.length >= limit) return;
+  const dhatuId = m[0];
+  const typeKey = m[1];
 
-            results.push({
-              dhatuId,
-              dhatuName: opadesha,
-              gana,
-              meaning: artha,
-              matchType: typeKey === 't' ? 'ting' : 'krut',
-              form: queryDeva,
-              family,
-              prayoga,
-              lakara: typeKey === 't' ? lakaraOrPrat : undefined,
-              pratyaya: typeKey === 'k' ? lakaraOrPrat : undefined,
-              slot: String(slot),
-            });
-            if (results.length >= limit) break;
-          }
-        }
-      }
-    } catch {
-      // Fallback to sequential scan below
+  let matchType: SearchResultItem['matchType'] | null = null;
+  const item: Partial<SearchResultItem> & { dhatuId: string; form: string } = { dhatuId, form: qDeva };
+  let family = '';
+  let lakaraOrPrat = '';
+
+  if (typeKey === 't') {
+    matchType = 'ting';
+    family = m[2];
+    item.prayoga = m[3];
+    lakaraOrPrat = m[4];
+    item.lakara = lakaraOrPrat;
+    item.slot = String(m[5]);
+  } else if (typeKey === 'k') {
+    matchType = 'krut';
+    family = m[2];
+    lakaraOrPrat = m[3];
+    item.pratyaya = lakaraOrPrat;
+  } else if (typeKey === 'p') {
+    // Prefixed row inserted before a main-row tail:
+    //   t: [id,'p',stack,'t',family,prayoga,lakara,slot]
+    //   k: [id,'p',stack,'k',family,pratyaya,idx,gender]
+    //   s: [id,'p',stack,'s',family,pratyaya,idx,gender,vibhakti,vacana]
+    const kind = m[3];
+    matchType = 'prefixed';
+    item.prefix = m[2];
+    if (kind === 't') {
+      family = m[4];
+      item.prayoga = m[5];
+      lakaraOrPrat = m[6];
+      item.lakara = lakaraOrPrat;
+      item.slot = String(m[7]);
+    } else if (kind === 'k') {
+      family = m[4];
+      lakaraOrPrat = m[5];
+      item.pratyaya = lakaraOrPrat;
+      item.gender = typeof m[7] === 'string' ? m[7] : undefined;
+    } else if (kind === 's') {
+      family = m[4];
+      lakaraOrPrat = m[5];
+      item.pratyaya = lakaraOrPrat;
+      item.gender = typeof m[7] === 'string' ? m[7] : undefined;
+      item.vibhakti = m[8];
+      item.vacana = m[9];
+    } else {
+      return; // unknown prefixed row kind
     }
+  } else if (typeKey === 's') {
+    // Bare krDanta subanta declension: [id,'s',family,pratyaya,vibhakti,vacana,form]
+    matchType = 'subanta';
+    family = m[2];
+    lakaraOrPrat = m[3];
+    item.pratyaya = lakaraOrPrat;
+    item.vibhakti = m[4];
+    item.vacana = m[5];
+  } else if (typeKey === 'ps') {
+    // Prefixed krDanta subanta declension: [id,'ps',stack,family,pratyaya,vibh,vacana,form]
+    matchType = 'prefixed';
+    item.prefix = m[2];
+    family = m[3];
+    lakaraOrPrat = m[4];
+    item.pratyaya = lakaraOrPrat;
+    item.vibhakti = m[5];
+    item.vacana = m[6];
+  } else if (typeKey === 'pt') {
+    // Prefixed tiṅ: [id,'pt',stack,family,lakara,slot]
+    matchType = 'prefixed';
+    item.prefix = m[2];
+    family = m[3];
+    lakaraOrPrat = m[4];
+    item.lakara = lakaraOrPrat;
+    item.slot = String(m[5]);
+  } else {
+    return; // unknown row version
   }
 
-  // If already found matches via shard index, skip slow sequential scan
-  if (results.length === 0) {
-    // Determine target dhatus
-    let targetDhatus: string[] = [];
-    if (options.dhatu) {
-      const id = DhatuRepository.normalizeBaseindex(options.dhatu);
-      if (!id) {
-        console.error(pc.red(`Error: Dhatu not found: "${options.dhatu}"`));
-        process.exit(1);
-      }
-      targetDhatus = [id];
-    } else {
-      // Cross-dhatu search fallback: check all 2259 dhatus
-      const { items } = DhatuRepository.listDhatus({ limit: 0 });
-      targetDhatus = items.map(i => i.baseindex);
-    }
+  const seenKey = `${dhatuId}|${matchType}|${family}|${lakaraOrPrat}|${item.prayoga || ''}|${item.slot || ''}|${item.prefix || ''}`;
+  if (seenShard.has(seenKey)) return;
+  seenShard.add(seenKey);
 
-  for (const id of targetDhatus) {
+  const entry = DhatuRepository.getDhatu(dhatuId);
+  const opadesha = entry?.info.find(i => i.name === 'OpadeSikasvarUpam')?.value || dhatuId;
+  const artha = entry?.info.find(i => i.name === 'arTaH')?.value || '';
+  const gana = entry?.info.find(i => i.name === 'gaRaH')?.value || '';
+
+  results.push({
+    dhatuId,
+    dhatuName: opadesha,
+    gana,
+    meaning: artha,
+    matchType: matchType!,
+    form: qDeva,
+    family,
+    prayoga: item.prayoga,
+    lakara: item.lakara,
+    pratyaya: item.pratyaya,
+    slot: item.slot,
+    prefix: item.prefix,
+    vibhakti: item.vibhakti,
+    vacana: item.vacana,
+  });
+}
+
+// Fast shard tier lookup (if available)
+const shardDir = path.resolve(__dirname, '../../data/shards');
+const TIER_DIRS = [
+  { dir: shardDir, key: 'base' },
+  { dir: path.join(shardDir, 'sub'), key: 'sub' },
+  { dir: path.join(shardDir, 'stack'), key: 'stack' },
+];
+if (!options.dhatu && fs.existsSync(shardDir)) {
+  let hit = false;
+  for (const { dir } of TIER_DIRS) {
+    for (const qDeva of queryDevaList) {
+      const shardRes = WasmEngine.indexShard(qDeva, 256);
+      if (!(shardRes.ok && shardRes.shard !== undefined)) continue;
+      const shardNum = String(shardRes.shard).padStart(2, '0');
+      const shardFile = path.join(dir, `shard-${shardNum}.index.json`);
+      if (!fs.existsSync(shardFile)) continue;
+      const matches = ((): any[][] => {
+        const idxFile = shardFile.replace('.index.json', '.idx.bin');
+        if (fs.existsSync(idxFile)) return idxLookup(dir, shardNum, qDeva);
+        let rawShard = rawShardCache.get(shardNum + dir);
+        if (rawShard === undefined) {
+          rawShard = fs.readFileSync(shardFile, 'utf8');
+          rawShardCache.set(shardNum + dir, rawShard);
+        }
+        return extractShardForms(rawShard, qDeva);
+      })();
+
+      for (const m of matches) {
+        pushShardRow(m, qDeva);
+        if (results.length >= limit) break;
+      }
+      if (results.length > 0) { hit = true; break; }
+    }
+    if (hit) break;
+  }
+}
+
+// --dhatu scoped search: single-entry scan (fast, bounded)
+if (results.length === 0 && options.dhatu) {
+  const scopedId = DhatuRepository.normalizeBaseindex(options.dhatu);
+  if (!scopedId) {
+    console.error(pc.red(`Error: Dhatu not found: "${options.dhatu}"`));
+    process.exit(1);
+  }
+
+  for (const id of [scopedId]) {
     if (results.length >= limit) break;
 
     const entry = DhatuRepository.getDhatu(id);
@@ -120,7 +348,7 @@ export function handleSearch(query: string, options: SearchCommandOptions): void
           const variants = slotVal.split(/[,;\/]/).map(v => v.trim());
           for (const v of variants) {
             const vSlp1 = transliterate(v, 'slp1');
-            if (vSlp1 === querySlp1 || v === queryDeva || v === cleanQuery) {
+            if (slp1Readings.has(vSlp1) || devaReadings.has(v)) {
               const purusha = Math.floor((slotIdx % 9) / 3);
               const vacana = slotIdx % 3;
               results.push({
@@ -156,7 +384,7 @@ export function handleSearch(query: string, options: SearchCommandOptions): void
           const variants = f.split(/[,;\/]/).map(v => v.trim());
           for (const v of variants) {
             const vSlp1 = transliterate(v, 'slp1');
-            if (vSlp1 === querySlp1 || v === queryDeva || v === cleanQuery) {
+            if (slp1Readings.has(vSlp1) || devaReadings.has(v)) {
               results.push({
                 dhatuId: id,
                 dhatuName: opadesha,
@@ -189,7 +417,7 @@ export function handleSearch(query: string, options: SearchCommandOptions): void
               const variants = String(slotVal).split(/[,;\/]/).map(v => v.trim());
               for (const v of variants) {
                 const vSlp1 = transliterate(v, 'slp1');
-                if (vSlp1 === querySlp1 || v === queryDeva || v === cleanQuery) {
+                if (slp1Readings.has(vSlp1) || devaReadings.has(v)) {
                   results.push({
                     dhatuId: id,
                     dhatuName: opadesha,
@@ -229,16 +457,25 @@ export function handleSearch(query: string, options: SearchCommandOptions): void
   const headers = ['Dhatu', 'ID', 'Form', 'Type', 'Details', 'Meaning'];
   const tableRows = results.map(r => {
     let details = '';
-    if (r.matchType === 'ting') details = `${r.family || ''} · ${r.lakara || ''}`;
-    else if (r.matchType === 'krut') details = `${r.family || ''} · ${r.pratyaya || ''}`;
-    else if (r.matchType === 'prefixed') details = `${r.prefix || ''} + ${r.family || ''} · ${r.lakara || ''}`;
+    if (r.matchType === 'ting') details = detailsDeva([r.family || '', r.lakara || '']);
+    else if (r.matchType === 'krut') details = detailsDeva([r.family || '', r.pratyaya || '']);
+    else if (r.matchType === 'subanta') {
+      const extra = vacanaLabelDeva(r.vibhakti || '', r.vacana || '');
+      details = detailsDeva([r.prefix || '', r.family || '', r.pratyaya || '']) + (extra ? ` · ${extra}` : '');
+    }
+    else if (r.matchType === 'prefixed') {
+      const extra = vacanaLabelDeva(r.vibhakti || '', r.vacana || '');
+      const stackLbl = stackDeva(r.prefix || '');
+      details = detailsDeva([stackLbl, r.family || '', r.lakara || '', r.pratyaya || ''])
+        + (extra ? ` · ${extra}` : '');
+    }
 
     return [
       transliterate(r.dhatuName, script),
       r.dhatuId,
       transliterate(r.form, script),
       r.matchType,
-      transliterate(details, script),
+      renderDetailsDeva(details, script),
       transliterate(r.meaning, script),
     ];
   });

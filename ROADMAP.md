@@ -85,6 +85,14 @@ The CLI leverages:
   - Derive surface forms for upasarga prefixes + verb bases (e.g. `'वि + अति' भवति`).
 - [x] **`dhatugen translit <text>`**:
   - Multi-script converter: Devanagari, Harvard-Kyoto (HK), SLP1, IAST.
+  - Output formats: plain text, `--format json|markdown|csv|tsv`; `--script` honored as a `--to` parity alias.
+- [x] **`dhatugen completion <shell>`** (Phase 5 deliverable):
+  - Generates bash / zsh / fish completion scripts wired to the hidden
+    `dhatugen __complete` engine, which resolves subcommands, per-command
+    options, `--option=value` sequences, enumerated values (scripts,
+    formats, lakāras, families, kṛt pratyayas, upasargas, genders, gaṇas)
+    and dhātu identifiers via the 409KB lite index.
+  - `DHATUGEN_BIN` env override for non-globally-linked installations.
 
 ### Phase 3: Output Formatting & Presentation Layer
 - [x] Support `--format <table|json|csv|tsv|markdown>` across all commands.
@@ -109,7 +117,7 @@ The CLI leverages:
 
 ### Phase 5: Developer Experience, Documentation & CI
 - [x] Comprehensive documentation (`README.md`, man-style help, usage examples).
-- [ ] Shell auto-completion scripts (bash, zsh, fish) [optional future polish].
+- [x] Shell auto-completion scripts (bash, zsh, fish) — `dhatugen completion <shell>` + hidden `dhatugen __complete` engine.
 - [x] Performance benchmarks (startup time, latency per command, batch throughput).
 
 ---
