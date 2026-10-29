@@ -131,3 +131,23 @@
    - Quick tests run in < 2 seconds for interactive development (`npm test`).
    - Sample golden tests run across 10 gaṇas.
    - Exhaustive tests run across all 2,259 dhatus and 2,333 subanta files with progress indicators.
+
+---
+
+## 6. Protocol for Future LLMs / Autonomous Sessions
+
+When an LLM agent is prompted to resume or extend work in this repository (e.g. via `/goal` or an autonomous prompt):
+
+1. **Orientation**:
+   - First read `PROGRESS.md` (this file) and `ROADMAP.md`.
+   - Run `npm test` to verify that the environment and 29 baseline tests are passing.
+2. **Key Invariants**:
+   - **Keep it fast**: Maintain the cold startup time (<150ms) and warm REPL speed (<50ms). Always use the fast-path baseindex check and shard lookup.
+   - **Self-sufficiency**: Do not introduce remote network dependencies or hardcode paths outside `dhatugen/`. All assets must resolve relative to `PROJECT_ROOT`.
+   - **Script Parity**: All new commands/features must support `--script <slp1|deva|hk|iast>` (default `slp1`).
+   - **Multi-Format Output**: All new commands should support `--format <table|json|markdown|csv|tsv>` and `--json`.
+3. **Execution Workflow**:
+   - Make code edits in `src/`.
+   - Run `npm run build` (`tsc`).
+   - Run test suite: `npm test`, `npm run test:subanta`, `npm run test:audit`.
+   - Update `PROGRESS.md` with new features, test results, and decisions before closing the turn.
