@@ -85,11 +85,13 @@ export function renderSubantaTable(
   matrix: Record<string, { eka: string[]; dvi: string[]; bahu: string[] }>,
   stem: string,
   gender: string,
-  script: ScriptType = 'slp1'
+  script: ScriptType = 'slp1',
+  meta?: string
 ): string {
   const isDeva = script === 'deva';
   const titleStem = transliterate(stem, script);
-  const title = `Subanta: ${titleStem} (${gender})`;
+  const metaSuffix = meta ? ` · ${meta}` : '';
+  const title = `Subanta: ${titleStem} (${gender})${metaSuffix}`;
 
   const colHeaders = [
     pc.bold(isDeva ? 'विभक्तिः' : 'viBaktiH'),

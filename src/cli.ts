@@ -105,7 +105,18 @@ program
   .option('--script <script>', 'Script for Sanskrit forms: slp1, deva, hk, iast', 'slp1')
   .option('--json', 'Shortcut for --format json')
   .action((stem, gender, opts) => {
-    handleSubanta(stem, gender, opts);
+    let s = stem;
+    let g = gender;
+    let o = opts;
+    if (typeof s === 'object' && s !== null) {
+      o = s;
+      s = undefined;
+      g = undefined;
+    } else if (typeof g === 'object' && g !== null) {
+      o = g;
+      g = undefined;
+    }
+    handleSubanta(s, g, o);
   });
 
 // WORD / DECLINE command
@@ -126,7 +137,18 @@ program
   .option('--script <script>', 'Script for Sanskrit forms: slp1, deva, hk, iast', 'slp1')
   .option('--json', 'Shortcut for --format json')
   .action((stem, gender, opts) => {
-    handleSubanta(stem, gender, opts);
+    let s = stem;
+    let g = gender;
+    let o = opts;
+    if (typeof s === 'object' && s !== null) {
+      o = s;
+      s = undefined;
+      g = undefined;
+    } else if (typeof g === 'object' && g !== null) {
+      o = g;
+      g = undefined;
+    }
+    handleSubanta(s, g, o);
   });
 
 // SEARCH command

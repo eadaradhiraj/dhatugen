@@ -11,10 +11,11 @@ export function formatSubanta(
   stem: string,
   gender: string,
   script: ScriptType,
-  format: OutputFormat
+  format: OutputFormat,
+  meta?: string
 ): string {
   if (format === 'table') {
-    return renderSubantaTable(matrix, stem, gender, script);
+    return renderSubantaTable(matrix, stem, gender, script, meta);
   }
   const isDeva = script === 'deva';
   const vHeader = isDeva ? 'विभक्तिः' : 'viBaktiH';
@@ -74,7 +75,9 @@ export function handleSubanta(
 
     const fixture = DhatuRepository.getSubantaFixture(options.dhatu);
     const krtName = options.krt ? transliterate(options.krt, 'slp1').toLowerCase() : 'satf';
-    const family = options.family || 'krut';
+    let family = (options.family || 'krut').toLowerCase();
+    if (family === 'shuddha') family = 'krut';
+    else if (!family.endsWith('_krut') && family !== 'krut') family = `${family}_krut`;
     const prefix = options.prefix ? transliterate(options.prefix, 'deva') : null;
 
     let subantaEntry: any = null;
@@ -93,7 +96,8 @@ export function handleSubanta(
         console.log(JSON.stringify(subantaEntry, null, 2));
         return;
       }
-      console.log(formatSubanta(subantaEntry.table, subantaEntry.pratipadika, gender, script, format));
+      const famMeta = family !== 'krut' ? ` · ${family}` : '';
+      console.log(formatSubanta(subantaEntry.table, subantaEntry.pratipadika, gender, script, format, `${options.dhatu} · ${subantaEntry.pratyaya}${famMeta}`));
       return;
     }
 
