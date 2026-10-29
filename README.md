@@ -210,6 +210,12 @@ npm run test:audit
 
 # 4. Exhaustive golden verification (all 2,259 dhatus and 2,333 subanta files):
 npm run test:full
+
+# 5. (OPTIONAL, ~40 min) Per-cell cross-implementation recompute sweep:
+#    re-derives all ~51.4M subanta cells via the wasm engine and diffs them
+#    against the upstream-generated fixtures (86.6% exact; the remainder are
+#    classified valid alternant policies — see tests/subanta/recompute.test.ts):
+npm run test:recompute
 ```
 
 ---

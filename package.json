@@ -17,6 +17,7 @@
     "test:full": "vitest run tests/golden/full.test.ts tests/subanta/full.test.ts",
     "test:subanta": "vitest run tests/subanta/sample.test.ts",
     "test:subanta:full": "vitest run tests/subanta/full.test.ts",
+    "test:recompute": "vitest run tests/subanta/recompute.test.ts",
     "test:audit": "vitest run tests/audit/reverse.test.ts"
   },
   "keywords": [
