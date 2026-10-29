@@ -1,0 +1,16 @@
+{
+  "name": "dhaturupa-wasm",
+  "description": "Rust clone of ashtadhyayi.com/dhatu list + info/upasarga (no prakriya/commentary/kosha)",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eadaradhiraj/dhaturupa-wasm"
+  },
+  "files": [
+    "dhaturupa_wasm_bg.wasm",
+    "dhaturupa_wasm.js",
+    "dhaturupa_wasm.d.ts"
+  ],
+  "main": "dhaturupa_wasm.js",
+  "types": "dhaturupa_wasm.d.ts"
+}

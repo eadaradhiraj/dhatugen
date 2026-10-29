@@ -1,0 +1,48 @@
+{
+  "name": "dhatugen",
+  "version": "1.0.0",
+  "description": "Exhaustive TypeScript CLI for Sanskrit verbal morphology, Ashtadhyayi dhaturupa, and subanta declensions",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "dhatugen": "dist/cli.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run tests/unit tests/golden/sample.test.ts",
+    "test:fast": "vitest run tests/unit tests/golden/sample.test.ts",
+    "test:full": "vitest run tests/golden/full.test.ts tests/subanta/full.test.ts",
+    "test:subanta": "vitest run tests/subanta/sample.test.ts",
+    "test:subanta:full": "vitest run tests/subanta/full.test.ts",
+    "test:audit": "vitest run tests/audit/reverse.test.ts"
+  },
+  "keywords": [
+    "sanskrit",
+    "dhatu",
+    "dhatupatha",
+    "ashtadhyayi",
+    "panini",
+    "morphology",
+    "grammar",
+    "subanta",
+    "tinganta",
+    "krdanta",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cli-table3": "^0.6.5",
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4"
+  }
+}
